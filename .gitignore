@@ -1,0 +1,43 @@
+# Node modules
+node_modules/
+
+# Build output
+out/
+dist/
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+*.log
+
+# VS Code settings
+.vscode/
+
+# TypeScript
+*.tsbuildinfo
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+*.swp
+*.DS_Store
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# Coverage reports
+coverage/
+
+# Dependency directories
+jspm_packages/
+
+# Package locks (if not committed)
+package-lock.json
+yarn.lock
+
+# Other OS-specific files
+Thumbs.db
