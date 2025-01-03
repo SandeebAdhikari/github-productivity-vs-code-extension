@@ -1,26 +1,72 @@
-// The module 'vscode' contains the VS Code extensibility API
-// Import the module and reference it with the alias vscode in your code below
-import * as vscode from 'vscode';
+import * as vscode from "vscode";
+import { authenticateWithGitHub } from "./auth";
+import { startFileWatcher } from "./watcher";
+import { scheduleCommits } from "./scheduler";
+import { Octokit } from "@octokit/rest";
 
-// This method is called when your extension is activated
-// Your extension is activated the very first time the command is executed
-export function activate(context: vscode.ExtensionContext) {
+export async function activate(context: vscode.ExtensionContext) {
+  vscode.window.showInformationMessage(
+    "GitHub Productivity Extension Activated!"
+  );
 
-	// Use the console to output diagnostic information (console.log) and errors (console.error)
-	// This line of code will only be executed once when your extension is activated
-	console.log('Congratulations, your extension "github-productivity-vs-code-extension" is now active!');
+  // Command to initialize the code-tracking repository
+  const initRepoCommand = vscode.commands.registerCommand(
+    "extension.initRepo",
+    async () => {
+      try {
+        // Authenticate the user
+        const token = await authenticateWithGitHub();
+        if (!token) {
+          vscode.window.showErrorMessage("GitHub authentication failed.");
+          return;
+        }
 
-	// The command has been defined in the package.json file
-	// Now provide the implementation of the command with registerCommand
-	// The commandId parameter must match the command field in package.json
-	const disposable = vscode.commands.registerCommand('github-productivity-vs-code-extension.helloWorld', () => {
-		// The code you place here will be executed every time your command is executed
-		// Display a message box to the user
-		vscode.window.showInformationMessage('Hello World from GitHub Productivity VS Code Extension!');
-	});
+        const octokit = new Octokit({ auth: token });
 
-	context.subscriptions.push(disposable);
+        // Automatically create a new repository
+        const repoName = "code-tracking";
+        vscode.window.showInformationMessage(
+          `Creating repository '${repoName}' on GitHub...`
+        );
+
+        const response = await octokit.repos.createForAuthenticatedUser({
+          name: repoName,
+          private: true,
+          auto_init: true,
+        });
+
+        const repoUrl = response.data.ssh_url;
+        vscode.window.showInformationMessage(`Repository created: ${repoUrl}`);
+
+        // Initialize the repository locally and set up the remote
+        const terminal = vscode.window.createTerminal("Git Init");
+        terminal.show();
+        terminal.sendText(`git init && git remote add origin ${repoUrl}`);
+      } catch (error: unknown) {
+        if (error instanceof Error) {
+          vscode.window.showErrorMessage(
+            `Failed to create repository: ${error.message}`
+          );
+        } else {
+          vscode.window.showErrorMessage(
+            "An unknown error occurred while creating the repository."
+          );
+        }
+      }
+    }
+  );
+
+  context.subscriptions.push(initRepoCommand);
+
+  // Start file watcher
+  startFileWatcher(context);
+
+  // Start commit scheduler
+  scheduleCommits(context);
 }
 
-// This method is called when your extension is deactivated
-export function deactivate() {}
+export function deactivate() {
+  vscode.window.showInformationMessage(
+    "GitHub Productivity Extension Deactivated!"
+  );
+}
