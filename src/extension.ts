@@ -1,72 +1,74 @@
 import * as vscode from "vscode";
-import { authenticateWithGitHub } from "./auth";
-import { startFileWatcher } from "./watcher";
-import { scheduleCommits } from "./scheduler";
-import { Octokit } from "@octokit/rest";
+import { Watcher } from "./watcher";
+import { Scheduler } from "./scheduler";
+import { GitHubAuth } from "./auth";
 
 export async function activate(context: vscode.ExtensionContext) {
-  vscode.window.showInformationMessage(
-    "GitHub Productivity Extension Activated!"
-  );
+  const config = vscode.workspace.getConfiguration('activityTracker');
+  const watcher = new Watcher();
+  const githubAuth = new GitHubAuth();
 
-  // Command to initialize the code-tracking repository
-  const initRepoCommand = vscode.commands.registerCommand(
-    "extension.initRepo",
-    async () => {
-      try {
-        // Authenticate the user
-        const token = await authenticateWithGitHub();
-        if (!token) {
-          vscode.window.showErrorMessage("GitHub authentication failed.");
-          return;
-        }
-
-        const octokit = new Octokit({ auth: token });
-
-        // Automatically create a new repository
-        const repoName = "code-tracking";
-        vscode.window.showInformationMessage(
-          `Creating repository '${repoName}' on GitHub...`
-        );
-
-        const response = await octokit.repos.createForAuthenticatedUser({
-          name: repoName,
-          private: true,
-          auto_init: true,
-        });
-
-        const repoUrl = response.data.ssh_url;
-        vscode.window.showInformationMessage(`Repository created: ${repoUrl}`);
-
-        // Initialize the repository locally and set up the remote
-        const terminal = vscode.window.createTerminal("Git Init");
-        terminal.show();
-        terminal.sendText(`git init && git remote add origin ${repoUrl}`);
-      } catch (error: unknown) {
-        if (error instanceof Error) {
-          vscode.window.showErrorMessage(
-            `Failed to create repository: ${error.message}`
-          );
-        } else {
-          vscode.window.showErrorMessage(
-            "An unknown error occurred while creating the repository."
-          );
-        }
+  try {
+    // Retrieve or request GitHub token
+    let token = await context.secrets.get('githubToken');
+    if (!token) {
+      token = await vscode.window.showInputBox({ 
+        prompt: "Enter GitHub Personal Access Token (repo scope required)",
+        ignoreFocusOut: true
+      });
+      
+      if (!token) {
+        vscode.window.showErrorMessage("GitHub token is required for activity tracking");
+        return;
       }
+      await context.secrets.store('githubToken', token);
     }
-  );
 
-  context.subscriptions.push(initRepoCommand);
+    // Authenticate with GitHub
+    await githubAuth.authenticate(token);
 
-  // Start file watcher
-  startFileWatcher(context);
+    // Get configuration values
+    const repoName = config.get<string>('repoName', 'vscode-activity-tracker');
+    const intervalMinutes = config.get<number>('intervalMinutes', 30);
+    const isPrivateRepo = config.get<boolean>('repoPrivate', true);
 
-  // Start commit scheduler
-  scheduleCommits(context);
+    // Validate/Create repository
+    await githubAuth.validateRepo(repoName, isPrivateRepo);
+
+    // Initialize scheduler with all required parameters
+    const scheduler = new Scheduler(
+      watcher,
+      githubAuth,
+      repoName,  // Now passed as 3rd argument
+      intervalMinutes
+    );
+    scheduler.start();
+
+    // Register commands
+    context.subscriptions.push(
+      vscode.commands.registerCommand('activityTracker.stop', () => {
+        scheduler.stop();
+        vscode.window.showInformationMessage("Activity tracking stopped");
+      }),
+      vscode.commands.registerCommand('activityTracker.clearToken', async () => {
+        await context.secrets.delete('githubToken');
+        vscode.window.showInformationMessage("GitHub token cleared");
+      })
+    );
+
+  } catch (error) {
+    // Handle errors during activation
+    let errorMessage = "Failed to initialize activity tracker";
+    if (error instanceof Error) {
+      errorMessage += `: ${error.message}`;
+    }
+    vscode.window.showErrorMessage(errorMessage);
+    
+    // Clear invalid token
+    await context.secrets.delete('githubToken');
+  }
 }
 
 export function deactivate() {
-  vscode.window.showInformationMessage(
-    "GitHub Productivity Extension Deactivated!"
-  );
+  // Cleanup handled through extension subscriptions
 }

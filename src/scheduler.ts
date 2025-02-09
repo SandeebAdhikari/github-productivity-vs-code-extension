@@ -1,41 +1,71 @@
-import { exec } from "child_process";
 import * as vscode from "vscode";
-import { getChangeSummary } from "./watcher";
+import { Watcher } from "./watcher";
+import { GitHubAuth } from "./auth";
 
-export function scheduleCommits(context: vscode.ExtensionContext) {
-  // Schedule commits every 30 minutes
-  setInterval(() => {
-    // Generate the commit message based on changes
-    const commitMessage = getChangeSummary();
+export class Scheduler {
+  private watcher: Watcher;
+  private githubAuth: GitHubAuth;
+  private interval: NodeJS.Timeout | null = null;
+  private repoName: string;
+  private intervalMinutes: number;
 
-    // Skip committing if no changes were detected
-    if (!commitMessage) {
-      console.log(
-        "No significant changes in the last 30 minutes. Skipping commit."
-      );
+  constructor(watcher: Watcher, githubAuth: GitHubAuth, repoName: string, intervalMinutes: number) {
+    this.watcher = watcher;
+    this.githubAuth = githubAuth;
+    this.repoName = repoName;
+    this.intervalMinutes = intervalMinutes;
+  }
+
+  start() {
+    this.interval = setInterval(() => this.pushChanges(), this.intervalMinutes * 60 * 1000);
+  }
+
+  stop() {
+    this.interval && clearInterval(this.interval);
+  }
+
+  private async pushChanges() {
+  const changes = this.watcher.getChanges();
+  if (changes.length === 0) return;
+
+  let attempts = 0;
+  const maxAttempts = 3;
+
+  while (attempts < maxAttempts) {
+    try {
+      const updateContent = this.generateUpdateTable(changes);
+      await this.githubAuth.pushChanges(this.repoName, updateContent);
+      this.watcher.clearChanges();
       return;
-    }
+    } catch (error) {
+      attempts++;
+      
+      const errorMessage = error instanceof Error 
+        ? error.message 
+        : 'Unknown error occurred';
 
-    // Log the operation for debugging
-    console.log("Scheduling commit with message:", commitMessage);
-
-    // Execute Git commands
-    exec(
-      `git add . && git commit -m "${commitMessage}" && git push`,
-      (error, stdout, stderr) => {
-        if (error) {
-          vscode.window.showErrorMessage(
-            `Failed to commit and push: ${error.message}`
-          );
-          console.error("Commit error:", error.message);
-          console.error("Commit stderr:", stderr);
-        } else {
-          vscode.window.showInformationMessage(
-            `Changes committed successfully: ${commitMessage}`
-          );
-          console.log("Commit stdout:", stdout);
-        }
+      if (attempts === maxAttempts) {
+        vscode.window.showErrorMessage(
+          `Failed to push changes after ${maxAttempts} attempts: ${errorMessage}`
+        );
+      } else {
+        await new Promise(resolve => setTimeout(resolve, 5000));
       }
-    );
-  }, 30 * 60 * 1000); // Run every 30 minutes
+    }
+  }
+  }
+
+  private generateUpdateTable(changes: any[]) {
+  const timestamp = new Date().toISOString();
+  const header = `## Changes at ${timestamp}\n` + 
+                 "| File | Last Modified | Change Type |\n" +
+                 "| ---- | ------------- | ----------- |\n";
+  
+  const rows = changes.map(
+    (change) => `| ${change.file} | ${change.lastModified.toISOString()} | ${change.changes} |`
+  ).join("\n");
+
+  return `${header}${rows}\n\n`; // Append to existing content
+ }
 }
+
